@@ -1,0 +1,61 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/pages.yml]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: site
+    env:
+      NEXT_PUBLIC_BASE_PATH: /torrent-drive
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Audit dependencies
+        run: bun audit
+      - name: Test dependency compatibility
+        run: bun run test
+      - name: Lint
+        run: bun run lint
+      - name: Type check
+        run: bun run typecheck
+      - name: Build static export
+        run: bun run build
+      - uses: actions/configure-pages@v6
+        if: github.event_name != 'pull_request'
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/out
+          # v4 stopped bundling dotfiles. site/public/.nojekyll is exported to
+          # site/out/.nojekyll and would otherwise be dropped from the artifact.
+          include-hidden-files: true
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-26.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

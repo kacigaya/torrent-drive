@@ -1,5 +1,6 @@
 # Optional WireGuard VPN for torrent and Drive traffic.
-# Configure provider values in your private .env file. See docs/self-hosting.md.
+# Configure provider values in your private .env file. See
+# https://kacigaya.github.io/torrent-drive/docs/user-guide/vpn/
 services:
   vpn:
     image: qmcgaw/gluetun:v3
