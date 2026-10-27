@@ -53,6 +53,10 @@ Open <http://127.0.0.1:8080>. The [quick start guide](https://kacigaya.github.io
 explains each step, including [Google OAuth](https://kacigaya.github.io/torrent-drive/docs/getting-started/google-oauth/)
 and [remote servers](https://kacigaya.github.io/torrent-drive/docs/user-guide/remote-access/).
 
+AI coding agents can set it up for you with the
+[`torrent-drive-setup` skill](.agents/skills/torrent-drive-setup/SKILL.md).
+It is also linked from `.claude/skills/` and `.codex/skills/`.
+
 The dashboard has no login. Keep it on loopback or behind an authenticated
 proxy. Read [SECURITY.md](SECURITY.md).
 
