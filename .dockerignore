@@ -2,11 +2,12 @@
 !Dockerfile
 !go.mod
 !go.sum
-!LICENSE
-!THIRD_PARTY_NOTICES.md
-!licenses/
-!licenses/**
-!*.go
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+internal/web/dist/
+internal/web/dist.next/
 !frontend/
 !frontend/**
 frontend/node_modules/

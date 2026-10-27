@@ -165,13 +165,27 @@ cd ..
 go test -p 2 ./...
 go test -race -p 2 ./...
 go vet ./...
-GOMAXPROCS=2 CGO_ENABLED=0 go build -p 2 -o bin/torrent-drive .
+GOMAXPROCS=2 CGO_ENABLED=0 go build -p 2 -o bin/torrent-drive ./cmd/torrent-drive
 ```
 
-`web/` is generated output. Edit `frontend/` instead. The test suite uses real
+`internal/web/dist/` is generated output. Edit `frontend/` instead. The test suite uses real
 local torrent peers and simulated Drive responses. Live Drive tests are opt-in
 and require your own credentials and dedicated test folder. See
 [testing](docs/testing.md).
+
+### Project layout
+
+| Path | Contents |
+| --- | --- |
+| `cmd/torrent-drive` | Command-line entry point and control-socket client |
+| `internal/worker` | Job queue, run loop, and control API |
+| `internal/swarm` | Torrent metadata checks, RAM piece store, and piece reader |
+| `internal/drive` | Google Drive client and resumable, checkpointed uploads |
+| `internal/jobs` | Job manifests and their on-disk store |
+| `internal/web` | Dashboard gateway and embedded frontend build |
+| `internal/auth` | One-time Google OAuth setup |
+| `internal/testkit` | Test fixtures: local seeder and fake Drive server |
+| `frontend` | Next.js dashboard source |
 
 ## Branding
 
@@ -189,4 +203,4 @@ torrent files. Read [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Dependencies retain their [own licenses](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE).

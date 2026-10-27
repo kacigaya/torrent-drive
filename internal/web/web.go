@@ -1,4 +1,5 @@
-package main
+// Package web serves the dashboard and proxies an allowlisted API to the worker.
+package web
 
 import (
 	"bytes"
@@ -20,14 +21,20 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/kacigaya/torrent-drive/internal/drive"
+	"github.com/kacigaya/torrent-drive/internal/jobs"
 )
 
-//go:embed all:web
-var dashboardAssets embed.FS
+// dist is the static Next.js export. Build it with `bun run build` in frontend/.
+//
+//go:embed all:dist
+var assets embed.FS
 
-const dashboardURL = "http://127.0.0.1:8080"
+// DefaultOrigin is the browser origin for local development.
+const DefaultOrigin = "http://127.0.0.1:8080"
 
-type webConfig struct {
+type Config struct {
 	Origin, WorkerSocket, Listen, Socket string
 	DefaultFolder, QBittorrentURL        string
 	ContainerListen                      bool
@@ -41,11 +48,8 @@ func webError(w http.ResponseWriter, code int, message string) {
 	}{message})
 }
 
-func newWebHandler(origin, workerSocket string) (http.Handler, error) {
-	return configuredWebHandler(webConfig{Origin: origin, WorkerSocket: workerSocket})
-}
-
-func configuredWebHandler(config webConfig) (http.Handler, error) {
+// Handler validates config and returns the dashboard handler.
+func Handler(config Config) (http.Handler, error) {
 	origin, workerSocket := config.Origin, config.WorkerSocket
 	public, err := url.Parse(origin)
 	if err != nil || public.Host == "" || public.User != nil || public.RawQuery != "" || public.Fragment != "" || public.Path != "" {
@@ -54,7 +58,7 @@ func configuredWebHandler(config webConfig) (http.Handler, error) {
 	if public.Scheme != "https" && !(public.Scheme == "http" && net.ParseIP(public.Hostname()).IsLoopback()) {
 		return nil, errors.New("dashboard requires HTTPS or a loopback development origin")
 	}
-	if config.DefaultFolder != "" && (!validID(config.DefaultFolder) || config.DefaultFolder == "root") {
+	if config.DefaultFolder != "" && (!drive.ValidID(config.DefaultFolder) || config.DefaultFolder == "root") {
 		return nil, errors.New("default folder must be a Google Drive folder ID")
 	}
 	if config.QBittorrentURL != "" {
@@ -63,7 +67,7 @@ func configuredWebHandler(config webConfig) (http.Handler, error) {
 			return nil, errors.New("qBittorrent link must be an HTTP(S) URL without credentials or query parameters")
 		}
 	}
-	page, err := dashboardAssets.ReadFile("web/index.html")
+	page, err := assets.ReadFile("dist/index.html")
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +174,7 @@ func configuredWebHandler(config webConfig) (http.Handler, error) {
 			http.NotFound(w, r)
 			return
 		}
-		data, err := dashboardAssets.ReadFile("web" + r.URL.Path)
+		data, err := assets.ReadFile("dist" + r.URL.Path)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -223,7 +227,7 @@ func allowedWebAPI(r *http.Request) bool {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/folders" {
 		query, err := url.ParseQuery(r.URL.RawQuery)
-		return err == nil && len(query) == 1 && len(query["parent"]) == 1 && validID(query.Get("parent"))
+		return err == nil && len(query) == 1 && len(query["parent"]) == 1 && drive.ValidID(query.Get("parent"))
 	}
 	if r.Method != http.MethodPost || r.URL.RawQuery != "" {
 		return false
@@ -232,11 +236,12 @@ func allowedWebAPI(r *http.Request) bool {
 		return true
 	}
 	parts := strings.Split(r.URL.Path, "/")
-	return len(parts) == 5 && parts[1] == "api" && parts[2] == "jobs" && len(parts[3]) == 32 && validID(parts[3]) && (parts[4] == "pause" || parts[4] == "retry" || parts[4] == "clear")
+	return len(parts) == 5 && parts[1] == "api" && parts[2] == "jobs" && jobs.ValidID(parts[3]) && (parts[4] == "pause" || parts[4] == "retry" || parts[4] == "clear")
 }
 
-func serveWeb(ctx context.Context, config webConfig) error {
-	handler, err := configuredWebHandler(config)
+// Serve listens on config.Socket, or on the loopback TCP address config.Listen.
+func Serve(ctx context.Context, config Config) error {
+	handler, err := Handler(config)
 	if err != nil {
 		return err
 	}

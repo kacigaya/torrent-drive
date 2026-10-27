@@ -39,8 +39,8 @@ Do not use real private credentials in CI or upload runtime volumes as artifacts
 ## Live Drive test
 
 Live tests create real Drive files. Use a dedicated folder and an isolated
-worker. The test generates CC0 text in RAM and reads the uploaded files back
-to compare their SHA-256 and size. It does not delete Drive files.
+worker. The test generates CC0 text in RAM. It then compares the SHA-256 and size that
+Drive reports for each uploaded file with the generated text. It does not delete Drive files.
 
 Set these environment variables for a native test process:
 
@@ -48,7 +48,7 @@ Set these environment variables for a native test process:
 export TORRENT_DRIVE_LIVE=1
 export TORRENT_DRIVE_OAUTH=/path/to/private/oauth.json
 export TORRENT_DRIVE_TEST_PARENT=YOUR_DEDICATED_TEST_FOLDER_ID
-go test -run '^TestLiveDrive$' -v
+go test ./internal/worker -run '^TestLiveDrive$' -v
 ```
 
 The test expects a worker at the default control socket. Run it under the same

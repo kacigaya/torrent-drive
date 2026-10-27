@@ -1,4 +1,5 @@
-package main
+// Package auth runs the one-time Google OAuth flow and saves a refresh token.
+package auth
 
 import (
 	"context"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kacigaya/torrent-drive/internal/drive"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/endpoints"
 )
@@ -34,7 +36,9 @@ func desktopClient(data []byte) (*oauth2.Config, error) {
 	return &oauth2.Config{ClientID: document.Installed.ClientID, ClientSecret: document.Installed.ClientSecret, Endpoint: endpoints.Google, Scopes: []string{"https://www.googleapis.com/auth/drive"}}, nil
 }
 
-func authorize(parent context.Context, clientPath, output, address string) error {
+// Authorize prints a Google consent URL, waits for the loopback callback,
+// and writes the credential to output. It never overwrites a file.
+func Authorize(parent context.Context, clientPath, output, address string) error {
 	if clientPath == "" {
 		return errors.New("provide --client /path/to/client.json")
 	}
@@ -84,7 +88,7 @@ func authorize(parent context.Context, clientPath, output, address string) error
 	if err != nil || token.RefreshToken == "" {
 		return errors.New("Google authorization failed or returned no refresh token; repeat setup and grant offline access")
 	}
-	encoded, err := json.Marshal(credential{config.ClientID, config.ClientSecret, *token})
+	encoded, err := json.Marshal(drive.Credential{ClientID: config.ClientID, ClientSecret: config.ClientSecret, Token: *token})
 	if err != nil {
 		return err
 	}

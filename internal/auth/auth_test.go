@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"context"
@@ -48,7 +48,7 @@ func TestAuthorizeNeverOverwritesExistingCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte("existing"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := authorize(context.Background(), "unused-client.json", path, "127.0.0.1:53682"); err == nil {
+	if err := Authorize(context.Background(), "unused-client.json", path, "127.0.0.1:53682"); err == nil {
 		t.Fatal("existing output accepted")
 	}
 	data, _ := os.ReadFile(path)

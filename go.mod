@@ -1,4 +1,4 @@
-module torrent-drive
+module github.com/kacigaya/torrent-drive
 
 go 1.27.0
 

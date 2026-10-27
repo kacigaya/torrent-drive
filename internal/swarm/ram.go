@@ -1,4 +1,4 @@
-package main
+package swarm
 
 import (
 	"context"
@@ -11,13 +11,15 @@ import (
 	"github.com/anacrolix/torrent/storage"
 )
 
-const maxPiece = 64 << 20
+// MaxPiece is the largest torrent piece, and so the largest payload buffer.
+const MaxPiece = 64 << 20
 
 var errInactivePiece = errors.New("piece is outside the RAM window")
 var errRetiredPiece = errors.New("piece was evicted from the RAM window")
 
-// Only the requested piece can allocate payload memory. No storage path exists.
-type ramStore struct {
+// Store is torrent storage that holds only the requested piece in RAM.
+// No disk path exists.
+type Store struct {
 	mu       sync.Mutex
 	index    int
 	retired  int
@@ -26,20 +28,21 @@ type ramStore struct {
 	peak     int
 }
 
-func newRAMStore() *ramStore { return &ramStore{index: -1, retired: -1} }
+// NewStore returns an empty one-piece RAM window.
+func NewStore() *Store { return &Store{index: -1, retired: -1} }
 
-func (s *ramStore) OpenTorrent(_ context.Context, info *metainfo.Info, _ metainfo.Hash) (storage.TorrentImpl, error) {
+func (s *Store) OpenTorrent(_ context.Context, info *metainfo.Info, _ metainfo.Hash) (storage.TorrentImpl, error) {
 	if err := validateInfo(info); err != nil {
 		return storage.TorrentImpl{}, err
 	}
 	return storage.TorrentImpl{
-		Piece: func(p metainfo.Piece) storage.PieceImpl { return &ramPiece{s: s, index: p.Index()} },
+		Piece: func(p metainfo.Piece) storage.PieceImpl { return &piece{s: s, index: p.Index()} },
 		Close: func() error { s.release(); return nil },
 	}, nil
 }
 
-func (s *ramStore) begin(index, size int) error {
-	if size <= 0 || size > maxPiece {
+func (s *Store) begin(index, size int) error {
+	if size <= 0 || size > MaxPiece {
 		return errors.New("piece exceeds the 64 MiB RAM limit")
 	}
 	s.mu.Lock()
@@ -55,7 +58,7 @@ func (s *ramStore) begin(index, size int) error {
 	return nil
 }
 
-func (s *ramStore) release() {
+func (s *Store) release() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.retired = max(s.retired, s.index)
@@ -63,7 +66,7 @@ func (s *ramStore) release() {
 	clear(s.data)
 }
 
-func (s *ramStore) copyVerified(index int, dst []byte, off int64) error {
+func (s *Store) copyVerified(index int, dst []byte, off int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.index != index || !s.complete {
@@ -76,12 +79,12 @@ func (s *ramStore) copyVerified(index int, dst []byte, off int64) error {
 	return nil
 }
 
-type ramPiece struct {
-	s     *ramStore
+type piece struct {
+	s     *Store
 	index int
 }
 
-func (p *ramPiece) ReadAt(b []byte, off int64) (int, error) {
+func (p *piece) ReadAt(b []byte, off int64) (int, error) {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	if p.s.index != p.index {
@@ -97,7 +100,7 @@ func (p *ramPiece) ReadAt(b []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (p *ramPiece) WriteAt(b []byte, off int64) (int, error) {
+func (p *piece) WriteAt(b []byte, off int64) (int, error) {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	if p.s.index != p.index {
@@ -113,7 +116,7 @@ func (p *ramPiece) WriteAt(b []byte, off int64) (int, error) {
 	return copy(p.s.data[off:], b), nil
 }
 
-func (p *ramPiece) MarkComplete() error {
+func (p *piece) MarkComplete() error {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	if p.s.index != p.index {
@@ -123,7 +126,7 @@ func (p *ramPiece) MarkComplete() error {
 	return nil
 }
 
-func (p *ramPiece) MarkNotComplete() error {
+func (p *piece) MarkNotComplete() error {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	if p.s.index == p.index {
@@ -132,7 +135,7 @@ func (p *ramPiece) MarkNotComplete() error {
 	return nil
 }
 
-func (p *ramPiece) Completion() storage.Completion {
+func (p *piece) Completion() storage.Completion {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	return storage.Completion{Ok: true, Complete: p.s.index == p.index && p.s.complete}

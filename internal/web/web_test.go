@@ -1,4 +1,4 @@
-package main
+package web
 
 import (
 	"bytes"
@@ -38,7 +38,7 @@ func dashboardBackend(t *testing.T, handler http.Handler) string {
 
 func webRequest(t *testing.T, handler http.Handler, method, path string, headers map[string]string, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(method, dashboardURL+path, strings.NewReader(body))
+	r := httptest.NewRequest(method, DefaultOrigin+path, strings.NewReader(body))
 	for key, value := range headers {
 		r.Header.Set(key, value)
 	}
@@ -64,7 +64,7 @@ func TestDashboardProxyLimitsRoutesAndStripsBrowserHeaders(t *testing.T) {
 			io.WriteString(w, "[]")
 		}
 	}))
-	handler, err := newWebHandler(dashboardURL, socket)
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: socket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestDashboardProxyLimitsRoutesAndStripsBrowserHeaders(t *testing.T) {
 	if response.Code != 200 || response.Body.String() != "[]" {
 		t.Fatal("job list failed", response.Code, response.Body.String())
 	}
-	headers := map[string]string{"Origin": dashboardURL, "Content-Type": "application/json", "X-Torrent-Drive": "1", "Cookie": "private"}
+	headers := map[string]string{"Origin": DefaultOrigin, "Content-Type": "application/json", "X-Torrent-Drive": "1", "Cookie": "private"}
 	response = webRequest(t, handler, "POST", "/api/jobs", headers, `{"folder":"abc","magnet":"private-source"}`)
 	if response.Code != 201 || !strings.Contains(response.Body.String(), "private-source") {
 		t.Fatal("submission did not reach worker", response.Code)
@@ -85,16 +85,16 @@ func TestDashboardProxyLimitsRoutesAndStripsBrowserHeaders(t *testing.T) {
 }
 
 func TestDashboardRejectsCrossSiteWritesAndHostSpoofing(t *testing.T) {
-	handler, err := newWebHandler(dashboardURL, "/nonexistent/socket")
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: "/nonexistent/socket"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, headers := range []map[string]string{
 		{},
 		{"Origin": "https://attacker.example", "Content-Type": "application/json", "X-Torrent-Drive": "1"},
-		{"Origin": dashboardURL, "Content-Type": "text/plain", "X-Torrent-Drive": "1"},
-		{"Origin": dashboardURL, "Content-Type": "application/json"},
-		{"Origin": dashboardURL, "Content-Type": "application/json", "X-Torrent-Drive": "1", "Sec-Fetch-Site": "cross-site"},
+		{"Origin": DefaultOrigin, "Content-Type": "text/plain", "X-Torrent-Drive": "1"},
+		{"Origin": DefaultOrigin, "Content-Type": "application/json"},
+		{"Origin": DefaultOrigin, "Content-Type": "application/json", "X-Torrent-Drive": "1", "Sec-Fetch-Site": "cross-site"},
 	} {
 		if r := webRequest(t, handler, "POST", "/api/jobs", headers, "{}"); r.Code != 403 {
 			t.Fatalf("cross-site write returned %d", r.Code)
@@ -113,7 +113,7 @@ func TestDashboardRejectsCrossSiteWritesAndHostSpoofing(t *testing.T) {
 }
 
 func TestDashboardExternalNavigation(t *testing.T) {
-	handler, err := newWebHandler(dashboardURL, "/unused/socket")
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: "/unused/socket"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestDashboardExternalNavigation(t *testing.T) {
 		{"API write", "POST", "/api/jobs", "cross-site", "navigate", "document", 403},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			headers := map[string]string{"Sec-Fetch-Site": test.site, "Sec-Fetch-Mode": test.mode, "Sec-Fetch-Dest": test.destination, "Origin": dashboardURL, "Content-Type": "application/json", "X-Torrent-Drive": "1"}
+			headers := map[string]string{"Sec-Fetch-Site": test.site, "Sec-Fetch-Mode": test.mode, "Sec-Fetch-Dest": test.destination, "Origin": DefaultOrigin, "Content-Type": "application/json", "X-Torrent-Drive": "1"}
 			response := webRequest(t, handler, test.method, test.path, headers, "")
 			if response.Code != test.want {
 				t.Fatalf("got HTTP %d, want %d", response.Code, test.want)
@@ -145,7 +145,7 @@ func TestDashboardExternalNavigation(t *testing.T) {
 }
 
 func TestDashboardReturnsSafeUnavailableAndBodyLimitErrors(t *testing.T) {
-	handler, err := newWebHandler(dashboardURL, "/private/worker/not-found.sock")
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: "/private/worker/not-found.sock"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,9 +153,9 @@ func TestDashboardReturnsSafeUnavailableAndBodyLimitErrors(t *testing.T) {
 	if w.Code != 503 || strings.Contains(w.Body.String(), "/private/") {
 		t.Fatal("unsafe worker failure", w.Code, w.Body.String())
 	}
-	r := httptest.NewRequest("POST", dashboardURL+"/api/jobs", strings.NewReader("{}"))
+	r := httptest.NewRequest("POST", DefaultOrigin+"/api/jobs", strings.NewReader("{}"))
 	r.ContentLength = 13 << 20
-	r.Header.Set("Origin", dashboardURL)
+	r.Header.Set("Origin", DefaultOrigin)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-Torrent-Drive", "1")
 	w = httptest.NewRecorder()
@@ -166,7 +166,7 @@ func TestDashboardReturnsSafeUnavailableAndBodyLimitErrors(t *testing.T) {
 }
 
 func TestDashboardPrivateDocumentMetadataAndAssets(t *testing.T) {
-	handler, err := newWebHandler(dashboardURL, "/unused/socket")
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: "/unused/socket"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,32 +187,32 @@ func TestDashboardPrivateDocumentMetadataAndAssets(t *testing.T) {
 			t.Fatal("missing asset", path)
 		}
 	}
-	for _, path := range []string{"/web.go", "/index.html", "/package.json", "/.env", "/_next/static/../index.html", "/_next/static/%2e%2e/index.html"} {
+	for _, path := range []string{"/web.go", "/dist/index.html", "/index.html", "/package.json", "/.env", "/_next/static/../index.html", "/_next/static/%2e%2e/index.html"} {
 		if r := webRequest(t, handler, "GET", path, nil, ""); r.Code != 404 {
 			t.Fatal("unlisted asset exposed", path)
 		}
 	}
-	assets := 0
-	fs.WalkDir(dashboardAssets, "web/_next/static", func(path string, entry fs.DirEntry, err error) error {
+	served := 0
+	fs.WalkDir(assets, "dist/_next/static", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !entry.IsDir() && (strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css")) {
-			response := webRequest(t, handler, "GET", strings.TrimPrefix(path, "web"), nil, "")
+			response := webRequest(t, handler, "GET", strings.TrimPrefix(path, "dist"), nil, "")
 			if response.Code != 200 || response.Body.Len() == 0 || !strings.Contains(response.Header().Get("Content-Type"), map[bool]string{true: "javascript", false: "css"}[strings.HasSuffix(path, ".js")]) {
 				t.Fatal("Next asset not served", path, response.Code)
 			}
-			assets++
+			served++
 		}
 		return nil
 	})
-	if assets < 2 {
+	if served < 2 {
 		t.Fatal("Next production export missing")
 	}
 }
 
 func TestDashboardAllowsOnlyBuildHashedInlineScripts(t *testing.T) {
-	handler, err := newWebHandler(dashboardURL, "/unused/socket")
+	handler, err := Handler(Config{Origin: DefaultOrigin, WorkerSocket: "/unused/socket"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,12 +261,12 @@ func TestDashboardPolicyHashesOnlyRenderedStyleAttributes(t *testing.T) {
 func TestBaseUIScrollbarStyleMatchesBundle(t *testing.T) {
 	// Base UI builds the rule from a class name constant. Check both halves so an
 	// upstream change fails here instead of as a silent CSP block in the browser.
-	chunks, err := fs.Glob(dashboardAssets, "web/_next/static/chunks/*.js")
+	chunks, err := fs.Glob(assets, "dist/_next/static/chunks/*.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range chunks {
-		data, _ := dashboardAssets.ReadFile(name)
+		data, _ := assets.ReadFile(name)
 		if bytes.Contains(data, []byte(`"base-ui-disable-scrollbar"`)) && bytes.Contains(data, []byte("{scrollbar-width:none}.${")) && bytes.Contains(data, []byte("}::-webkit-scrollbar{display:none}`")) {
 			return
 		}
@@ -277,14 +277,14 @@ func TestBaseUIScrollbarStyleMatchesBundle(t *testing.T) {
 func TestDashboardNeverBindsPublicTCP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := serveWeb(ctx, webConfig{Origin: dashboardURL, Listen: "0.0.0.0:0"}); err == nil {
+	if err := Serve(ctx, Config{Origin: DefaultOrigin, Listen: "0.0.0.0:0"}); err == nil {
 		t.Fatal("public TCP listener accepted")
 	}
 }
 
 func TestRuntimeSettingsAreValidatedAndPrivate(t *testing.T) {
-	config := webConfig{Origin: dashboardURL, WorkerSocket: "/unused", DefaultFolder: "example-folder", QBittorrentURL: "https://qbit.example.com/"}
-	handler, err := configuredWebHandler(config)
+	config := Config{Origin: DefaultOrigin, WorkerSocket: "/unused", DefaultFolder: "example-folder", QBittorrentURL: "https://qbit.example.com/"}
+	handler, err := Handler(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,13 +302,13 @@ func TestRuntimeSettingsAreValidatedAndPrivate(t *testing.T) {
 	}
 	for _, url := range []string{"javascript:alert(1)", "https://user:secret@qbit.example.com/", "https://qbit.example.com/?token=secret"} {
 		config.QBittorrentURL = url
-		if _, err := configuredWebHandler(config); err == nil {
+		if _, err := Handler(config); err == nil {
 			t.Fatal("unsafe qBittorrent URL accepted")
 		}
 	}
 	config.QBittorrentURL = ""
 	config.DefaultFolder = "root"
-	if _, err := configuredWebHandler(config); err == nil {
+	if _, err := Handler(config); err == nil {
 		t.Fatal("invalid default destination accepted")
 	}
 }

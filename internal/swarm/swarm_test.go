@@ -1,41 +1,26 @@
-package main
+package swarm
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
 	"crypto/sha256"
 	"errors"
-	"io"
 	"testing"
 	"time"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/storage"
+	"github.com/kacigaya/torrent-drive/internal/testkit"
 )
 
-func testMetainfo(data []byte, pieceLength int64) *metainfo.MetaInfo {
-	info := metainfo.Info{Name: "legal-test.txt", PieceLength: pieceLength, Length: int64(len(data))}
-	for off := int64(0); off < int64(len(data)); off += pieceLength {
-		sum := sha1.Sum(data[off:min(off+pieceLength, int64(len(data)))])
-		info.Pieces = append(info.Pieces, sum[:]...)
-	}
-	b, err := bencode.Marshal(info)
-	if err != nil {
-		panic(err)
-	}
-	return &metainfo.MetaInfo{InfoBytes: b}
-}
-
 func TestRAMWindowAndVerificationGate(t *testing.T) {
-	s := newRAMStore()
+	s := NewStore()
 	if err := s.begin(0, 32768); err != nil {
 		t.Fatal(err)
 	}
-	p := &ramPiece{s, 0}
-	next := &ramPiece{s, 1}
+	p := &piece{s, 0}
+	next := &piece{s, 1}
 	if _, err := next.WriteAt([]byte("x"), 0); err == nil {
 		t.Fatal("inactive piece accepted data")
 	}
@@ -65,71 +50,17 @@ func TestRAMWindowAndVerificationGate(t *testing.T) {
 	if s.peak != 32768 {
 		t.Fatalf("memory grew with torrent size: %d", s.peak)
 	}
-	if err := s.begin(100, maxPiece+1); err == nil {
+	if err := s.begin(100, MaxPiece+1); err == nil {
 		t.Fatal("oversized piece accepted")
 	}
 }
 
-type seedStore struct{ data []byte }
-
-func (s seedStore) OpenTorrent(_ context.Context, info *metainfo.Info, _ metainfo.Hash) (storage.TorrentImpl, error) {
-	return storage.TorrentImpl{Piece: func(p metainfo.Piece) storage.PieceImpl { return seedPiece{s.data[p.Offset() : p.Offset()+p.Length()]} }, Close: func() error { return nil }}, nil
-}
-
-type seedPiece struct{ data []byte }
-
-func (p seedPiece) ReadAt(b []byte, off int64) (int, error) {
-	if off < 0 || off >= int64(len(p.data)) {
-		return 0, io.EOF
-	}
-	n := copy(b, p.data[off:])
-	if n < len(b) {
-		return n, io.EOF
-	}
-	return n, nil
-}
-func (p seedPiece) WriteAt([]byte, int64) (int, error) { return 0, io.ErrClosedPipe }
-func (p seedPiece) MarkComplete() error                { return nil }
-func (p seedPiece) MarkNotComplete() error             { return nil }
-func (p seedPiece) Completion() storage.Completion {
-	return storage.Completion{Ok: true, Complete: true}
-}
-
-func startSeeder(t *testing.T, data []byte, mi *metainfo.MetaInfo) *torrent.Client {
-	t.Helper()
-	config := torrent.NewDefaultClientConfig()
-	config.DefaultStorage = seedStore{data}
-	config.NoDHT = true
-	config.DisableTrackers = true
-	config.NoDefaultPortForwarding = true
-	config.DisableUTP = true
-	config.DisableWebtorrent = true
-	config.DisableWebseeds = true
-	config.DisableIPv6 = true
-	config.ListenHost = func(string) string { return "127.0.0.1" }
-	config.ListenPort = 0
-	config.Seed = true
-	c, err := torrent.NewClient(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { c.Close() })
-	spec, err := torrent.TorrentSpecFromMetaInfoErr(mi)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = addTorrent(context.Background(), c, spec); err != nil {
-		t.Fatal(err)
-	}
-	return c
-}
-
 func TestRealTorrentPeerToBoundedRAM(t *testing.T) {
 	data := bytes.Repeat([]byte("Public domain test data.\n"), 40000)
-	mi := testMetainfo(data, 64<<10)
-	seed := startSeeder(t, data, mi)
-	ram := newRAMStore()
-	config := torrentConfig(ram)
+	mi := testkit.Metainfo(data, 64<<10)
+	seed := testkit.StartSeeder(t, data, mi)
+	ram := NewStore()
+	config := NewClientConfig(ram)
 	config.NoDHT = true
 	config.DisableTrackers = true
 	c, err := torrent.NewClient(config)
@@ -139,13 +70,13 @@ func TestRealTorrentPeerToBoundedRAM(t *testing.T) {
 	defer c.Close()
 	spec, _ := torrent.TorrentSpecFromMetaInfoErr(mi)
 	spec.DisallowDataDownload = true
-	download, err := addTorrent(context.Background(), c, spec)
+	download, err := Add(context.Background(), c, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer download.Drop()
 	download.AddClientPeer(seed)
-	source := newPieceSource(download, ram)
+	source := NewPieceSource(download, ram)
 	download.AllowDataDownload()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -166,7 +97,7 @@ func TestRealTorrentPeerToBoundedRAM(t *testing.T) {
 }
 
 func TestMetadataRejectsUnsafePathsAndLimits(t *testing.T) {
-	mi := testMetainfo([]byte("legal test"), 16384)
+	mi := testkit.Metainfo([]byte("legal test"), 16384)
 	info, _ := mi.UnmarshalInfo()
 	for _, name := range []string{"../x", "..", "x/y", "x\\y", "\x00"} {
 		v := info
@@ -175,21 +106,21 @@ func TestMetadataRejectsUnsafePathsAndLimits(t *testing.T) {
 			t.Fatalf("accepted %q", name)
 		}
 	}
-	info.PieceLength = maxPiece + 1
+	info.PieceLength = MaxPiece + 1
 	if validateInfo(&info) == nil {
 		t.Fatal("accepted oversized pieces")
 	}
-	if _, err := readMetainfo(make([]byte, maxMetadata+1)); err == nil {
+	if _, err := ReadMetainfo(make([]byte, MaxMetadata+1)); err == nil {
 		t.Fatal("accepted oversized metadata")
 	}
 }
 
 func TestCorruptTorrentPieceIsRejected(t *testing.T) {
 	expected := bytes.Repeat([]byte("verified original"), 200)
-	mi := testMetainfo(expected, 16<<10)
-	seed := startSeeder(t, bytes.Repeat([]byte("x"), len(expected)), mi)
-	ram := newRAMStore()
-	config := torrentConfig(ram)
+	mi := testkit.Metainfo(expected, 16<<10)
+	seed := testkit.StartSeeder(t, bytes.Repeat([]byte("x"), len(expected)), mi)
+	ram := NewStore()
+	config := NewClientConfig(ram)
 	config.NoDHT = true
 	config.DisableTrackers = true
 	c, err := torrent.NewClient(config)
@@ -199,20 +130,20 @@ func TestCorruptTorrentPieceIsRejected(t *testing.T) {
 	defer c.Close()
 	spec, _ := torrent.TorrentSpecFromMetaInfoErr(mi)
 	spec.DisallowDataDownload = true
-	download, err := addTorrent(context.Background(), c, spec)
+	download, err := Add(context.Background(), c, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer download.Drop()
 	download.AddClientPeer(seed)
-	source := newPieceSource(download, ram)
+	source := NewPieceSource(download, ram)
 	download.AllowDataDownload()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if source.ReadAt(ctx, make([]byte, len(expected)), 0) == nil {
 		t.Fatal("corrupt torrent data passed verification")
 	}
-	if (&ramPiece{ram, 0}).Completion().Complete {
+	if (&piece{ram, 0}).Completion().Complete {
 		t.Fatal("corrupt piece marked complete")
 	}
 }
@@ -232,9 +163,9 @@ func TestV2MultiFileOffsetsAndIntegrity(t *testing.T) {
 	data := make([]byte, (16<<10)+3000)
 	copy(data, first)
 	copy(data[16<<10:], second)
-	seed := startSeeder(t, data, mi)
-	ram := newRAMStore()
-	config := torrentConfig(ram)
+	seed := testkit.StartSeeder(t, data, mi)
+	ram := NewStore()
+	config := NewClientConfig(ram)
 	config.NoDHT = true
 	config.DisableTrackers = true
 	c, err := torrent.NewClient(config)
@@ -247,13 +178,13 @@ func TestV2MultiFileOffsetsAndIntegrity(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec.DisallowDataDownload = true
-	download, err := addTorrent(context.Background(), c, spec)
+	download, err := Add(context.Background(), c, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer download.Drop()
 	download.AddClientPeer(seed)
-	source := newPieceSource(download, ram)
+	source := NewPieceSource(download, ram)
 	download.AllowDataDownload()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -277,7 +208,7 @@ func Test200GiBMetadataFitsWithoutPayloadAllocation(t *testing.T) {
 	if err := validateInfo(&info); err != nil {
 		t.Fatal(err)
 	}
-	s := newRAMStore()
+	s := NewStore()
 	if _, err := s.OpenTorrent(context.Background(), &info, metainfo.Hash{}); err != nil {
 		t.Fatal(err)
 	}
@@ -293,14 +224,14 @@ func Test200GiBMetadataFitsWithoutPayloadAllocation(t *testing.T) {
 }
 
 func TestMismatchedV1MetadataIsRejected(t *testing.T) {
-	mi := testMetainfo([]byte("legal metadata integrity test"), 16<<10)
+	mi := testkit.Metainfo([]byte("legal metadata integrity test"), 16<<10)
 	spec, err := torrent.TorrentSpecFromMetaInfoErr(mi)
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec.InfoHash[0] ^= 0xff
-	ram := newRAMStore()
-	config := torrentConfig(ram)
+	ram := NewStore()
+	config := NewClientConfig(ram)
 	config.NoDHT = true
 	config.DisableTrackers = true
 	c, err := torrent.NewClient(config)
@@ -310,18 +241,18 @@ func TestMismatchedV1MetadataIsRejected(t *testing.T) {
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err = addTorrent(ctx, c, spec); err == nil {
+	if _, err = Add(ctx, c, spec); err == nil {
 		t.Fatal("metadata did not match requested v1 infohash but was accepted")
 	}
 }
 
 func TestLateRetiredBlocksAreDroppedWithoutFailingActivePiece(t *testing.T) {
-	s := newRAMStore()
+	s := NewStore()
 	s.begin(0, 16384)
-	old := &ramPiece{s, 0}
+	old := &piece{s, 0}
 	s.release()
 	s.begin(1, 16384)
-	p := &pieceSource{store: s, writeErrors: make(chan error, 1)}
+	p := &PieceSource{store: s, writeErrors: make(chan error, 1)}
 	if _, err := old.WriteAt([]byte("late block"), 0); !errors.Is(err, errRetiredPiece) {
 		t.Fatal("expected a retired-piece write", err)
 	} else {
@@ -333,7 +264,7 @@ func TestLateRetiredBlocksAreDroppedWithoutFailingActivePiece(t *testing.T) {
 	if !bytes.Equal(s.data, make([]byte, len(s.data))) {
 		t.Fatal("late block changed the active piece")
 	}
-	future := &ramPiece{s, 2}
+	future := &piece{s, 2}
 	_, err := future.WriteAt([]byte("unexpected block"), 0)
 	if !errors.Is(err, errInactivePiece) {
 		t.Fatal("unrequested future piece accepted")
@@ -346,9 +277,9 @@ func TestLateRetiredBlocksAreDroppedWithoutFailingActivePiece(t *testing.T) {
 
 func TestMultiplePeersAcrossEvictedPieces(t *testing.T) {
 	data := bytes.Repeat([]byte("Legal public-domain swarm data.\n"), 500000)
-	mi := testMetainfo(data, 1<<20)
-	ram := newRAMStore()
-	config := torrentConfig(ram)
+	mi := testkit.Metainfo(data, 1<<20)
+	ram := NewStore()
+	config := NewClientConfig(ram)
 	config.NoDHT = true
 	config.DisableTrackers = true
 	c, err := torrent.NewClient(config)
@@ -358,15 +289,15 @@ func TestMultiplePeersAcrossEvictedPieces(t *testing.T) {
 	defer c.Close()
 	spec, _ := torrent.TorrentSpecFromMetaInfoErr(mi)
 	spec.DisallowDataDownload = true
-	download, err := addTorrent(context.Background(), c, spec)
+	download, err := Add(context.Background(), c, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer download.Drop()
 	for i := 0; i < 8; i++ {
-		download.AddClientPeer(startSeeder(t, data, mi))
+		download.AddClientPeer(testkit.StartSeeder(t, data, mi))
 	}
-	source := newPieceSource(download, ram)
+	source := NewPieceSource(download, ram)
 	download.AllowDataDownload()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -393,7 +324,7 @@ func TestMultiplePeersAcrossEvictedPieces(t *testing.T) {
 		}
 	}
 	source.peerDataLimit = 1
-	if err = source.ReadAt(ctx, buffer, 0); !errors.Is(err, errRecycleClient) {
+	if err = source.ReadAt(ctx, buffer, 0); !errors.Is(err, ErrRecycleClient) {
 		t.Fatal("peer-data budget did not trigger a controlled refresh", err)
 	}
 }

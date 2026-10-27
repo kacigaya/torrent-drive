@@ -1,4 +1,4 @@
-package main
+package worker
 
 import (
 	"bytes"
@@ -13,12 +13,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/kacigaya/torrent-drive/internal/drive"
+	"github.com/kacigaya/torrent-drive/internal/jobs"
+	"github.com/kacigaya/torrent-drive/internal/testkit"
 )
 
 // This test writes only metadata locally. Generated CC0 text remains in RAM.
@@ -27,33 +31,33 @@ func TestLiveDrive(t *testing.T) {
 		t.Skip("set TORRENT_DRIVE_LIVE=1 and test credentials for a real Drive test")
 	}
 	if os.Getenv("TORRENT_DRIVE_VPN_DNS") == "1" {
-		vpnDNS()
+		UseVPNDNS()
 	}
 	oauthPath := os.Getenv("TORRENT_DRIVE_OAUTH")
 	if oauthPath == "" {
 		oauthPath = "/etc/torrent-drive/oauth.json"
 	}
-	d, err := newDrive(oauthPath)
+	d, err := drive.New(oauthPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	parent := os.Getenv("TORRENT_DRIVE_TEST_PARENT")
-	if parent == "" || parent == "root" || !validID(parent) {
+	if parent == "" || parent == "root" || !drive.ValidID(parent) {
 		t.Fatal("set TORRENT_DRIVE_TEST_PARENT to a dedicated test folder ID")
 	}
-	folder, err := d.generateID(ctx)
+	folder, err := d.GenerateID(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := "torrent-drive-test-" + time.Now().UTC().Format("20060102T150405")
-	if err = d.ensureFolder(ctx, folder, name, parent); err != nil {
+	if err = d.EnsureFolder(ctx, folder, name, parent); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("TEST_FOLDER https://drive.google.com/drive/folders/%s", folder)
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", defaultSocket)
+		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/torrent-drive/control.sock")
 	}}}
 	call := func(method, target string, body []byte) ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, method, "http://local"+target, bytes.NewReader(body))
@@ -85,7 +89,7 @@ func TestLiveDrive(t *testing.T) {
 			if mode != "torrent" {
 				content = data[:210004]
 			}
-			mi := testMetainfo(content, 256<<10)
+			mi := testkit.Metainfo(content, 256<<10)
 			info, _ := mi.UnmarshalInfo()
 			private := true
 			info.Private = &private
@@ -101,7 +105,7 @@ func TestLiveDrive(t *testing.T) {
 				}
 			}
 			mi.InfoBytes, _ = bencode.Marshal(info)
-			seed := startSeeder(t, content, mi)
+			seed := testkit.StartSeeder(t, content, mi)
 			peer := seed.ListenAddrs()[0].String()
 			// A loopback tracker keeps this legal fixture isolated from public swarms.
 			tracker := &http.Server{ReadHeaderTimeout: 5 * time.Second}
@@ -130,7 +134,7 @@ func TestLiveDrive(t *testing.T) {
 			mi.Announce = "http://" + listener.Addr().String() + "/announce"
 			var metadata bytes.Buffer
 			mi.Write(&metadata)
-			submission := submitRequest{Folder: folder, Torrent: metadata.Bytes()}
+			submission := Submission{Folder: folder, Torrent: metadata.Bytes()}
 			if mode == "magnet" {
 				hash := mi.HashInfoBytes()
 				submission.Torrent = nil
@@ -141,7 +145,7 @@ func TestLiveDrive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var submitted jobView
+			var submitted jobs.View
 			if err = json.Unmarshal(response, &submitted); err != nil {
 				t.Fatal(err)
 			}
@@ -153,18 +157,18 @@ func TestLiveDrive(t *testing.T) {
 					if ctx.Err() != nil {
 						t.Fatal(err)
 					}
-					sleepContext(ctx, time.Second)
+					time.Sleep(time.Second)
 					continue
 				}
-				var jobs []jobView
-				if err = json.Unmarshal(response, &jobs); err != nil {
+				var views []jobs.View
+				if err = json.Unmarshal(response, &views); err != nil {
 					t.Fatal(err)
 				}
-				for _, j := range jobs {
+				for _, j := range views {
 					if j.ID != submitted.ID {
 						continue
 					}
-					if mode == "torrent" && j.Uploaded >= uploadChunk && !restartReady {
+					if mode == "torrent" && j.Uploaded >= drive.ChunkSize && !restartReady {
 						restartReady = true
 						if restartTest {
 							if _, err = call("POST", "/jobs/"+j.ID+"/pause", nil); err != nil {
@@ -193,34 +197,24 @@ func TestLiveDrive(t *testing.T) {
 						} else {
 							expected = nil
 						}
-						req, err := http.NewRequestWithContext(ctx, "GET", d.base+"/files/"+result.ID+"?alt=media", nil)
-						if err != nil {
-							t.Fatal(err)
-						}
-						r, err := d.http.Do(req)
-						if err != nil {
-							t.Fatal("Drive readback failed")
-						}
-						if r.StatusCode != 200 {
-							r.Body.Close()
-							t.Fatalf("Drive readback HTTP %d", r.StatusCode)
-						}
-						h := sha256.New()
-						n, err := io.Copy(h, r.Body)
-						r.Body.Close()
-						if err != nil {
-							t.Fatal(err)
+						// Drive computes sha256Checksum from the stored bytes.
+						remote, exists, err := d.Get(ctx, result.ID)
+						if err != nil || !exists {
+							t.Fatal("Drive readback failed", err)
 						}
 						wanted := sha256.Sum256(expected)
-						if n != int64(len(expected)) || hex.EncodeToString(h.Sum(nil)) != hex.EncodeToString(wanted[:]) {
-							t.Fatal("Drive readback differs from generated source")
+						n, _ := strconv.ParseInt(remote.Size, 10, 64)
+						if n != int64(len(expected)) || remote.SHA256 != hex.EncodeToString(wanted[:]) {
+							t.Fatal("Drive file differs from generated source")
 						}
 						t.Logf("VERIFIED %s bytes=%d sha256=%s drive=https://drive.google.com/file/d/%s/view", result.Path, n, result.SHA256, result.ID)
 					}
 					return
 				}
-				if sleepContext(ctx, time.Second) != nil {
+				select {
+				case <-ctx.Done():
 					t.Fatal("live test timed out")
+				case <-time.After(time.Second):
 				}
 			}
 		})
