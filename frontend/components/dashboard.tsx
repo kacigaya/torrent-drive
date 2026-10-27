@@ -100,7 +100,7 @@ function SiteHeader({ config }: { config: RuntimeConfig }) {
 }
 
 function useTransfers() {
-  const [data, setData] = useState<{ jobs: Job[] | null; speeds: Record<string, number | null>; connected: boolean; error: string; updated: string }>({ jobs: null, speeds: {}, connected: false, error: "", updated: "" });
+  const [data, setData] = useState<{ jobs: Job[] | null; speeds: Record<string, number | null>; connected: boolean; error: string }>({ jobs: null, speeds: {}, connected: false, error: "" });
   const samples = useRef(new Map<string, Sample[]>());
   const inFlight = useRef(false);
   const controller = useRef<AbortController | null>(null);
@@ -116,7 +116,7 @@ function useTransfers() {
         samples.current.set(job.id, result.history); speeds[job.id] = result.speed;
       }
       for (const id of samples.current.keys()) if (!jobs.some(job => job.id === id)) samples.current.delete(id);
-      setData({ jobs, speeds, connected: true, error: "", updated: new Date().toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) });
+      setData({ jobs, speeds, connected: true, error: "" });
     } catch (error) {
       if (!request.signal.aborted) setData(previous => ({ ...previous, connected: false, error: message(error) }));
     } finally { inFlight.current = false; }
@@ -528,7 +528,7 @@ export default function Dashboard() {
 }
 
 function DashboardContent({ config }: { config: RuntimeConfig }) {
-  const { jobs, speeds, connected, error, updated, reload } = useTransfers();
+  const { jobs, speeds, connected, error, reload } = useTransfers();
   useStatusToasts(jobs);
   const running = jobs?.find(job => job.status === "running");
   const queued = jobs?.filter(job => job.status !== "complete" && job !== running) ?? [];
@@ -545,14 +545,7 @@ function DashboardContent({ config }: { config: RuntimeConfig }) {
     <a className="fixed top-3 left-5 z-30 -translate-y-[180%] rounded-lg border-2 border-ring bg-background px-4 py-3 focus:translate-y-0" href="#main-content">Skip to content</a>
     <SiteHeader config={config} />
     <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-6xl px-5 pt-10 pb-12 outline-none sm:px-8 sm:pt-14">
-      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-baseline sm:justify-between">
-        <h1 className="font-bold text-4xl tracking-tight sm:text-5xl">Transfers</h1>
-        <p role="status" className={`flex items-center gap-2 text-sm ${connected ? "text-brand" : "text-muted-foreground"}`}>
-          <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
-          {connected ? "Downloader connected" : jobs ? "Reconnecting to downloader" : "Connecting to downloader"}
-          {updated && <span className="text-muted-foreground tabular-nums">· Updated {updated}</span>}
-        </p>
-      </div>
+      <h1 className="font-bold text-4xl tracking-tight sm:text-5xl">Transfers</h1>
       {!jobs && <Skeleton className="mt-3 h-5 w-72 max-w-full" />}
       {jobs && <p className="mt-2 text-muted-foreground tabular-nums">{active.length ? `${active.length} in progress · ${bytes(remaining)} left` : "Nothing in progress"} · {verified} {verified === 1 ? "file" : "files"} verified in Drive</p>}
       <noscript><p className="mt-6 rounded-lg border p-4 text-sm">Enable JavaScript to view progress and submit torrents.</p></noscript>
@@ -579,8 +572,7 @@ function DashboardContent({ config }: { config: RuntimeConfig }) {
         <SubmissionForm reload={reload} defaultFolder={config.default_folder} />
       </div>
     </main>
-    <footer className="mx-auto flex w-full max-w-6xl flex-col gap-2 border-t px-5 py-6 text-muted-foreground text-sm sm:flex-row sm:justify-between sm:px-8">
-      <span>Self-hosted · Keep access private</span>
+    <footer className="mx-auto flex w-full max-w-6xl flex-col gap-2 border-t px-5 py-6 text-muted-foreground text-sm sm:flex-row sm:justify-end sm:px-8">
       <div className="flex flex-wrap gap-x-5 gap-y-2">
         {config.qbittorrent_url && <a href={config.qbittorrent_url} target="_blank" rel="noopener noreferrer" className="hover:text-foreground hover:underline">qBittorrent<NewTabHint /></a>}
         <a href={folderUrl(config.default_folder)} target="_blank" rel="noopener noreferrer" className="hover:text-foreground hover:underline">Google Drive<NewTabHint /></a>
