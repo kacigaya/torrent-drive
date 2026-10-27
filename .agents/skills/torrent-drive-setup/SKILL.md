@@ -8,8 +8,9 @@ description: Use when a user asks to install, configure, self-host, update, back
 Torrent Drive downloads torrents into Google Drive. A worker container holds one
 verified piece in RAM and uploads it with Drive resumable uploads. A web
 container serves the dashboard on host loopback. Full docs:
-<https://kacigaya.github.io/torrent-drive/docs/>. The same pages are in
-`site/content/` in this repository.
+<https://kacigaya.github.io/torrent-drive/docs/>. For a plain-text index of
+every page, fetch <https://kacigaya.github.io/torrent-drive/llms.txt>. The same
+pages are in `site/content/` in this repository.
 
 ## Rules
 
