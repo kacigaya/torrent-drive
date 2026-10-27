@@ -1,0 +1,68 @@
+name: torrent-drive
+
+x-runtime: &runtime
+  image: ${TORRENT_DRIVE_IMAGE:-torrent-drive:local}
+  build: .
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  ulimits:
+    core: 0
+    nofile: {soft: 512, hard: 512}
+  logging:
+    driver: json-file
+    options: {max-size: "5m", max-file: "2"}
+
+services:
+  worker:
+    <<: *runtime
+    command: [serve, --state, /data, --oauth, /credentials/oauth.json]
+    restart: on-failure
+    stop_grace_period: 30s
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 2
+    volumes:
+      - state:/data
+      - control:/run/torrent-drive
+      - credentials:/credentials:ro
+    healthcheck:
+      test: [CMD, torrent-drive, status]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  web:
+    <<: *runtime
+    command:
+      - web
+      - --listen=0.0.0.0:8080
+      - --container-listen
+      - --origin=${ORIGIN:-http://127.0.0.1:8080}
+      - --default-folder=${DRIVE_FOLDER_ID:-}
+      - --qbittorrent-url=${QBITTORRENT_URL:-}
+    restart: on-failure
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    ports: ["127.0.0.1:${PORT:-8080}:8080"]
+    volumes: [control:/run/torrent-drive:ro]
+    depends_on:
+      worker: {condition: service_healthy}
+
+  authorize:
+    <<: *runtime
+    profiles: [setup]
+    command: [authorize, --client, /dev/stdin, --oauth, /credentials/oauth.json, --callback-listen, "0.0.0.0:53682"]
+    stdin_open: true
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    volumes: [credentials:/credentials]
+
+volumes:
+  state:
+  control:
+  credentials:

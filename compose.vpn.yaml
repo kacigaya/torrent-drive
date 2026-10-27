@@ -1,0 +1,26 @@
+# Optional WireGuard VPN for torrent and Drive traffic.
+# Configure provider values in your private .env file. See docs/self-hosting.md.
+services:
+  vpn:
+    image: qmcgaw/gluetun:v3
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun:/dev/net/tun]
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1
+    environment:
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:?Set your VPN provider}
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:?Set your WireGuard private key}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:?Set your provider WireGuard address}
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-}
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+
+  worker:
+    network_mode: service:vpn
+    command: [serve, --state, /data, --oauth, /credentials/oauth.json, --vpn-dns]
+    depends_on:
+      vpn: {condition: service_healthy}

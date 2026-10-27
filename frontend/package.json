@@ -1,0 +1,32 @@
+{
+  "name": "torrent-drive-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "bun@1.4.4",
+  "scripts": {
+    "dev": "bun --bun next dev --hostname 127.0.0.1",
+    "build": "bun --bun next build && bun scripts/export.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.61.0",
+    "morphicons": "2.0.2",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwind-merge": "3.7.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/bun": "1.4.4",
+    "@types/node": "24.10.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,7 @@
+# Replace the example domain. Keep this proxy on the same host as Compose.
+drive.example.com {
+    basic_auth {
+        admin {$DASHBOARD_PASSWORD_HASH}
+    }
+    reverse_proxy 127.0.0.1:8080
+}
